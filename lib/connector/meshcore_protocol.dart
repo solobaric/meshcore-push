@@ -39,6 +39,35 @@ class BufferReader {
 
   Uint8List readRemainingBytes() => readBytes(remaining);
 
+  // utf8.decode with allowMalformed:true can leave unpaired surrogates in
+  // the Dart string when a multi-byte emoji sequence is truncated. Those
+  // surrogates are valid Dart UTF-16 but crash jsonEncode, stdout, and the
+  // debug logging path. Strip them here at the source.
+  static String _sanitize(String s) {
+    final buf = StringBuffer();
+    for (var i = 0; i < s.length; i++) {
+      final c = s.codeUnitAt(i);
+      if (c >= 0xD800 && c <= 0xDBFF) {
+        // High surrogate — valid only if followed by a low surrogate.
+        if (i + 1 < s.length) {
+          final next = s.codeUnitAt(i + 1);
+          if (next >= 0xDC00 && next <= 0xDFFF) {
+            buf.writeCharCode(c);
+            buf.writeCharCode(next);
+            i++;
+            continue;
+          }
+        }
+        // Lone high surrogate — drop it.
+      } else if (c >= 0xDC00 && c <= 0xDFFF) {
+        // Lone low surrogate — drop it.
+      } else {
+        buf.writeCharCode(c);
+      }
+    }
+    return buf.toString();
+  }
+
   String readCStringGreedy(int maxLength) {
     _lastPointer = _pointer;
     final value = <int>[];
@@ -48,7 +77,9 @@ class BufferReader {
       value.add(byte);
     }
     try {
-      return utf8.decode(Uint8List.fromList(value), allowMalformed: true);
+      return _sanitize(
+        utf8.decode(Uint8List.fromList(value), allowMalformed: true),
+      );
     } catch (e) {
       return String.fromCharCodes(value); // Latin-1 fallback
     }
@@ -67,7 +98,9 @@ class BufferReader {
     }
     _lastPointer = backupPointer;
     try {
-      return utf8.decode(Uint8List.fromList(value), allowMalformed: true);
+      return _sanitize(
+        utf8.decode(Uint8List.fromList(value), allowMalformed: true),
+      );
     } catch (e) {
       return String.fromCharCodes(value); // Latin-1 fallback
     }
